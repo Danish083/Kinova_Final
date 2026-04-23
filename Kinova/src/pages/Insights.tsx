@@ -1,0 +1,542 @@
+// src/pages/Insights.tsx
+import React, { useEffect, useRef } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle,
+  Brain,
+  Activity,
+  Footprints,
+} from 'lucide-react';
+import { gsap } from 'gsap';
+import { useGaitMetrics, GaitDataEntry } from '@/hooks/useGaitMetrics';
+import { useMLInsightsFromFirebase } from '@/hooks/useMLInsightsFromFirebase';
+
+// Recharts components
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
+
+// ----------------- Helpers -----------------
+const mapValue = (
+  value: number,
+  inMin: number,
+  inMax: number,
+  outMin: number,
+  outMax: number
+): number => {
+  const mapped =
+    ((value - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+  return Math.max(outMin, Math.min(outMax, mapped));
+};
+
+const calculateRawCompositeScore = (entry: GaitDataEntry): number => {
+  if (
+    !entry ||
+    typeof entry.equilibriumScore !== 'number' ||
+    typeof entry.cadence !== 'number' ||
+    typeof entry.posturalSway !== 'number'
+  ) {
+    return 0;
+  }
+
+  const weights = {
+    equilibrium: 0.45,
+    cadence: 0.35,
+    sway: 0.2,
+  };
+
+  // Map equilibrium (example mapping — adjust if your sensors scale differs)
+  const equilibriumScore = mapValue(entry.equilibriumScore, 0.05, 0.4, 0, 100);
+  const optimalCadence = 110;
+  const maxDeviation = 35;
+  const cadenceDeviation = Math.abs(entry.cadence - optimalCadence);
+  const cadenceMappedScore = mapValue(cadenceDeviation, 0, maxDeviation, 100, 0);
+  const swayMappedScore = mapValue(entry.posturalSway, 25, 1, 0, 100);
+
+  const finalScore =
+    equilibriumScore * weights.equilibrium +
+    cadenceMappedScore * weights.cadence +
+    swayMappedScore * weights.sway;
+
+  return finalScore;
+};
+
+const getScoreLabel = (score: number): string => {
+  if (score >= 85) return 'Excellent';
+  if (score >= 70) return 'Good';
+  if (score >= 40) return 'Moderately Healthy';
+  return 'Needs Improvement';
+};
+
+const getScoreBadgeClasses = (score: number) => {
+  if (score > 60)
+    return "bg-green-500/20 text-green-300 border border-green-500/40";
+
+  if (score >= 40)
+    return "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40";
+
+  return "bg-red-500/20 text-red-300 border border-red-500/40";
+};
+
+// Map visual color classes for the number and ring color
+const getScoreColorClass = (score: number): string => {
+  if (score >= 70) return 'text-success';
+  if (score >= 40) return 'text-warning';
+  return 'text-destructive';
+};
+
+// Map ring color (returns CSS color string using theme variables — adjust if needed)
+const getRingColor = (score: number): string => {
+  if (score >= 70) return 'hsl(var(--success))';
+  if (score >= 40) return 'hsl(var(--warning))';
+  return 'hsl(var(--destructive))';
+};
+
+// Map badge variants to allowed shadcn variants
+const getBadgeVariant = (label?: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  if (!label) return 'secondary';
+  const normalized = label.toLowerCase();
+  if (normalized.includes('excellent') || normalized.includes('good') || normalized.includes('healthy')) {
+    return 'default';
+  }
+  if (normalized.includes('moderately')) {
+    return 'outline';
+  }
+  return 'destructive';
+};
+
+// ----------------- Component -----------------
+export default function Insights(): JSX.Element {
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const scoreRef = useRef<HTMLDivElement | null>(null);
+  const curveRef = useRef<HTMLDivElement | null>(null);
+  const recommendationsRef = useRef<HTMLDivElement | null>(null);
+
+  const { data: gaitData, loading, error } = useGaitMetrics();
+  const { data: mlData } = useMLInsightsFromFirebase('/gaitData/average_scores');
+
+  useEffect(() => {
+    document.title = 'Kinova - Insights';
+
+    if (headerRef.current) {
+      gsap.fromTo(
+        headerRef.current,
+        { y: -50, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.8, ease: 'power2.out' }
+      );
+    }
+    if (scoreRef.current) {
+      gsap.fromTo(
+        scoreRef.current,
+        { scale: 0.9, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 1, ease: 'back.out(1.7)', delay: 0.2 }
+      );
+    }
+    if (curveRef.current) {
+      gsap.fromTo(
+        curveRef.current,
+        { x: -50, opacity: 0 },
+        { x: 0, opacity: 1, duration: 0.8, ease: 'power2.out', delay: 0.4 }
+      );
+    }
+    if (recommendationsRef.current) {
+      gsap.fromTo(
+        recommendationsRef.current,
+        { y: 30, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.8, ease: 'power2.out', delay: 0.6 }
+      );
+    }
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-xl font-semibold text-foreground animate-pulse">
+          Analyzing gait data...
+        </p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-xl font-semibold text-destructive">
+          Error loading data: {error.message}
+        </p>
+      </div>
+    );
+  }
+
+  // Filter and select latest 30 valid entries
+  const latestData =
+    gaitData
+      ?.slice(-30)
+      .filter(
+        (entry) =>
+          entry &&
+          typeof entry.equilibriumScore === 'number' &&
+          typeof entry.cadence === 'number' &&
+          typeof entry.posturalSway === 'number'
+      ) ?? [];
+
+  // Fallback when nothing available
+  if (latestData.length === 0 && !mlData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-xl font-semibold text-muted-foreground">
+          No historical data available to generate insights.
+        </p>
+      </div>
+    );
+  }
+
+  // ML-provided gait score preferred
+  // Use gaitScoreDeterministic from average_scores node, fallback to avgGaitScoreLast20
+  const mlGaitScore = typeof mlData?.gaitScoreDeterministic === 'number' 
+    ? mlData.gaitScoreDeterministic 
+    : typeof mlData?.avgGaitScoreLast20 === 'number' 
+      ? mlData.avgGaitScoreLast20 
+      : undefined;
+  // Use gaitScoreClassification from average_scores node, fallback to avgClassificationLast20
+  const mlClassification = mlData?.gaitScoreClassification ?? mlData?.avgClassificationLast20;
+  const mlRecommendations = mlData?.mlRecommendations ?? undefined;
+
+  // Local composite fallback
+  const averageRawScore =
+    latestData.length > 0
+      ? latestData.reduce((sum, entry) => sum + calculateRawCompositeScore(entry), 0) / latestData.length
+      : 0;
+
+  const gaitScore = typeof mlGaitScore === 'number' ? clamp(mlGaitScore, 0, 100) : clamp(averageRawScore, 0, 100);
+  const scoreLabel = getScoreLabel(gaitScore);
+  const ringColor = getRingColor(gaitScore);
+  const scoreColorClass = getScoreColorClass(gaitScore);
+
+  // Local trend and insights (kept for extra context)
+  const insights: Array<{ title: string; description: string; icon: React.ReactNode; color: string }> = [];
+  const recommendations: Array<{ title: string; description: string; priority: 'low' | 'medium' | 'high' }> = [];
+
+  if (mlClassification) {
+    const isHealthy = mlClassification.toLowerCase().includes('healthy') || mlClassification.toLowerCase().includes('excellent') || mlClassification.toLowerCase().includes('good');
+    insights.push({
+      title: `Model Classification: ${mlClassification}`,
+      description: `ML-provided classification based on recent sessions.`,
+      icon: isHealthy ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />,
+      color: isHealthy ? 'success' : 'destructive',
+    });
+  }
+
+  if (latestData.length > 1) {
+    const start = calculateRawCompositeScore(latestData[0]);
+    const end = calculateRawCompositeScore(latestData[latestData.length - 1]);
+    const trend = ((end - start) / Math.abs(start || 1)) * 100;
+    if (trend > 5) {
+      insights.push({
+        title: 'Strong Upward Trend',
+        description: `Your gait score has improved by ${trend.toFixed(1)}% over recent sessions.`,
+        icon: <TrendingUp className="w-5 h-5" />,
+        color: 'primary',
+      });
+    } else if (trend < -5) {
+      insights.push({
+        title: 'Downward Trend',
+        description: `Your gait score has declined by ${Math.abs(trend).toFixed(1)}%. Consider reassessment.`,
+        icon: <AlertTriangle className="w-5 h-5" />,
+        color: 'destructive',
+      });
+      recommendations.push({
+        title: 'Focused Drills',
+        description: 'Practice balance and foundational movement exercises more frequently.',
+        priority: 'high',
+      });
+    } else {
+      insights.push({
+        title: 'Stable Performance',
+        description: 'Your gait score is consistent across recent sessions.',
+        icon: <CheckCircle className="w-5 h-5" />,
+        color: 'success',
+      });
+    }
+  }
+
+  // cadence variability
+  const cadenceValues = latestData.map((d) => d.cadence ?? 0);
+  if (cadenceValues.length > 0) {
+    const avgCadence = cadenceValues.reduce((a, b) => a + b, 0) / cadenceValues.length;
+    const variance = Math.sqrt(
+      cadenceValues.reduce((sum, v) => sum + (v - avgCadence) ** 2, 0) / cadenceValues.length
+    );
+    if (variance > 20) {
+      insights.push({
+        title: 'Cadence Variability',
+        description: 'Step rhythm is variable; rhythm training may help.',
+        icon: <AlertTriangle className="w-5 h-5" />,
+        color: 'warning',
+      });
+      recommendations.push({
+        title: 'Rhythm Exercises',
+        description: 'Use a metronome or guided walking to stabilize cadence.',
+        priority: 'medium',
+      });
+    } else {
+      insights.push({
+        title: 'Consistent Cadence',
+        description: 'Walking rhythm is stable and efficient.',
+        icon: <Footprints className="w-5 h-5" />,
+        color: 'success',
+      });
+    }
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push({
+      title: 'Maintain Consistency',
+      description: 'Keep current training to sustain performance.',
+      priority: 'low',
+    });
+  }
+
+  function smooth(values: number[], window = 5): number[] {
+  const smoothed: number[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const start = Math.max(0, i - Math.floor(window / 2));
+    const end = Math.min(values.length, i + Math.floor(window / 2) + 1);
+    const slice = values.slice(start, end);
+    smoothed.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+  }
+  return smoothed;
+}
+
+  // 1) Compute local raw scores
+let localScores = latestData.map(d => clamp(calculateRawCompositeScore(d), 0, 100));
+
+// 2) Smooth the local scores to remove spikes (fixes steep slopes)
+localScores = smooth(localScores, 5);  // window = 5, adjust if needed
+
+// 3) Align average to ML score
+const localMean = localScores.reduce((a, b) => a + b, 0) / localScores.length;
+const delta = typeof mlGaitScore === "number" ? (mlGaitScore - localMean) : 0;
+
+// 4) Shift smoothed scores so their mean matches ML
+const chartData = localScores.map((score, i) => ({
+  timestamp: new Date(latestData[i].timestamp ?? Date.now()).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  }),
+  score: clamp(score + delta, 0, 100),
+}));
+
+
+  return (
+    <div className="min-h-screen bg-background p-4 sm:p-6">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
+        {/* Header */}
+        <div ref={headerRef} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Gait Insights</h1>
+            <p className="text-muted-foreground mt-1 sm:mt-2 text-sm sm:text-base">
+              AI-powered gait analysis and personalized recommendations
+            </p>
+          </div>
+        </div>
+
+        {/* Overall Gait Score */}
+        <Card ref={scoreRef} className="bg-gradient-primary border-border/50 relative overflow-hidden">
+          <CardHeader className="text-center pb-3">
+            <CardTitle className="text-2xl font-bold text-foreground flex items-center justify-center gap-2">
+              <Brain className="w-6 h-6 text-primary" />
+              Overall Gait Score
+            </CardTitle>
+          </CardHeader>
+
+          <CardContent className="text-center space-y-6">
+            <div className="relative">
+              {/* subtle glow behind ring */}
+              <div
+                aria-hidden
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{ top: '6px' }}
+              >
+                <div
+                  style={{
+                    width: 180,
+                    height: 180,
+                    borderRadius: '9999px',
+                    filter: 'blur(18px)',
+                    opacity: 0.12,
+                    background: ringColor,
+                  }}
+                />
+              </div>
+
+              <div className="w-40 h-40 mx-auto relative z-10">
+                <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                  <path
+                    d="m18,2.0845 a 15.9155,15.9155 0 0,1 0,31.831 a 15.9155,15.9155 0 0,1 0,-31.831"
+                    fill="none"
+                    stroke="hsl(var(--muted))"
+                    strokeWidth="3"
+                  />
+                  <path
+                    d="m18,2.0845 a 15.9155,15.9155 0 0,1 0,31.831 a 15.9155,15.9155 0 0,1 0,-31.831"
+                    fill="none"
+                    stroke={ringColor}
+                    strokeWidth="3"
+                    strokeDasharray={`${gaitScore}, 100`}
+                    strokeLinecap="round"
+                    className="drop-shadow-sm"
+                  />
+                </svg>
+
+                <div className="absolute inset-0 flex items-center justify-center flex-col">
+                  <span className={`text-4xl font-extrabold ${scoreColorClass} drop-shadow-md`}>
+                    {gaitScore.toFixed(0)}
+                  </span>
+                  <span className="text-xs text-muted-foreground">/ 100</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <Badge className={getScoreBadgeClasses(gaitScore)}>
+  {scoreLabel} • ML
+</Badge>
+
+
+
+              <p className="text-sm text-muted-foreground mt-3">
+                {mlData
+                  ? `ML Gait Score (gaitScoreDeterministic): ${mlGaitScore?.toFixed(2)} — Classification: ${mlClassification ?? 'N/A'}`
+                  : `Based on key gait parameters over the last ${latestData.length} data points`}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ML Card (shows ML-provided details when available) */}
+        {mlData && (
+          <Card className="bg-card border-border/40">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                <Brain className="w-5 h-5 text-primary" />
+                ML Model Insights
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex justify-between">
+                <p className="text-sm text-muted-foreground">Gait Score (Deterministic)</p>
+                <p className="font-medium">{mlGaitScore?.toFixed(2) ?? '—'}</p>
+              </div>
+
+              <div className="flex justify-between">
+                <p className="text-sm text-muted-foreground">Classification</p>
+                <Badge className={getScoreBadgeClasses(gaitScore)}>
+  {mlClassification ?? '—'}
+</Badge>
+
+
+              </div>
+
+              {Array.isArray(mlRecommendations) && mlRecommendations.length > 0 && (
+                <div className="mt-2">
+                  <h4 className="font-semibold text-sm mb-1">ML Recommendations</h4>
+                  <ul className="list-disc pl-5 space-y-1">
+                    {mlRecommendations!.map((r, i) => (
+                      <li key={i} className="text-sm text-muted-foreground">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+          {/* Score Trend Curve */}
+          <Card ref={curveRef} className="bg-gradient-primary border-border/50">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-foreground">Score Progression</CardTitle>
+              <p className="text-sm text-muted-foreground">Recent gait score trend</p>
+            </CardHeader>
+            <CardContent>
+              <div className="h-64 rounded-lg p-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 10, right: 30, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+                    <XAxis dataKey="timestamp" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
+                    <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
+                    <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: 'none', borderRadius: '8px' }} />
+                    <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Key Insights */}
+          <Card ref={recommendationsRef} className="bg-gradient-primary border-border/50">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-foreground">Key Insights</CardTitle>
+              <p className="text-sm text-muted-foreground">AI-generated observations</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {insights.map((insight, index) => (
+                <div key={index} className="flex items-start gap-3 p-3 bg-card/30 rounded-lg border border-border/30">
+                  <div className="mt-1 text-muted-foreground">{insight.icon}</div>
+                  <div className="flex-1">
+                    <h4 className="font-medium text-foreground text-sm">{insight.title}</h4>
+                    <p className="text-xs text-muted-foreground mt-1">{insight.description}</p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Recommendations */}
+        <Card className="bg-gradient-primary border-border/50">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold text-foreground">Personalized Recommendations</CardTitle>
+            <p className="text-sm text-muted-foreground">Tailored exercises to improve your gait performance</p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {recommendations.map((rec, index) => (
+                <div key={index} className="p-4 bg-card/30 rounded-lg border border-border/30">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-medium text-foreground">{rec.title}</h4>
+                    <Badge
+                      variant={rec.priority === 'high' ? 'destructive' : rec.priority === 'medium' ? 'outline' : 'secondary'}
+                      className="text-xs"
+                    >
+                      {rec.priority}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{rec.description}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ----------------- utility -----------------
+function clamp(n: number, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, n));
+}
