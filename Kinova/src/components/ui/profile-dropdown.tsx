@@ -70,26 +70,6 @@ export function ProfileDropdown({
       label: 'Profile',
       action: () => navigate('/profile'),
     },
-    {
-      icon: Settings,
-      label: 'Settings',
-      action: () => navigate('/settings'),
-    },
-    {
-      icon: Palette,
-      label: 'Appearance',
-      action: () => console.log('Appearance settings'),
-    },
-    {
-      icon: Shield,
-      label: 'Privacy',
-      action: () => console.log('Privacy settings'),
-    },
-    {
-      icon: HelpCircle,
-      label: 'Help & Support',
-      action: () => console.log('Help & Support'),
-    },
   ];
 
   return (
